@@ -1,0 +1,10 @@
+
+
+build && install
+
+  $ git clone ssh://git@git.corp.qianka.com/chenlei/gogo-eeyore $GOPATH/src/eeyore
+  $ go install eeyore/cmd/eeyore-worker
+
+run
+
+  $ $GOPATH/bin/eeyore-worker [/path/to/eeyore.toml]

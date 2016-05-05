@@ -1,0 +1,39 @@
+debug = false
+
+[database]
+
+  [database.zhuanqian]
+  host = "127.0.0.1"
+  port = 3306
+  user = "root"
+  pass = ""
+  dbname = "zhuanqian"
+
+
+[redis]
+
+  [redis.frontend]
+  host = "127.0.0.1"
+  port = 6379
+  pass = ""
+  db = 0
+
+  [redis.backend]
+  host = "127.0.0.1"
+  port = 6379
+  pass = ""
+  db = 0
+
+[advertiser]
+
+  [advertiser.1]
+  sharedkey = "c2ad26c6-9d4e-4958-94ca-d8c566ab165a"
+
+  [advertiser.2]
+  impl = "jd"
+
+  [advertiser.3]
+  impl = "baidu_ime"
+
+  [advertiser.4]
+  impl = "qijia"
