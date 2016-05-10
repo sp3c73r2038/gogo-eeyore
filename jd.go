@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -34,15 +35,15 @@ type Response struct {
 func SendRequestJD(app App, ad Advertiser) []byte {
 
 	client_type := 0
-	if app.AppleId == "414245413" {
+	if app.AppleId == 414245413 {
 		// 商城
 		client_type = 1
-	} else if app.AppleId == "895682747" {
+	} else if app.AppleId == 895682747 {
 		client_type = 4
-	} else if app.AppleId == "832444218" {
+	} else if app.AppleId == 832444218 {
 		client_type = 7
 	} else {
-		fmt.Println("jd: unknown app id", app.AppleId)
+		log.Println("jd: unknown app id", app.AppleId)
 		return []byte("")
 	}
 
@@ -87,11 +88,11 @@ func SendRequestJD(app App, ad Advertiser) []byte {
 		Timeout: timeout,
 	}
 
-	fmt.Println("sending request to", JD_URL)
+	log.Println("sending request to", JD_URL)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 		return []byte("")
 	}
 
@@ -102,8 +103,8 @@ func SendRequestJD(app App, ad Advertiser) []byte {
 	text, _ := ioutil.ReadAll(resp.Body)
 
 	if resp.StatusCode != 200 {
-		fmt.Println("status not 200:", resp.StatusCode)
-		fmt.Println("response:", string(text))
+		log.Println("status not 200:", resp.StatusCode)
+		log.Println("response:", string(text))
 		return []byte("")
 	}
 

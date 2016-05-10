@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -33,8 +34,8 @@ func SendRequestBaiduIME(app App, ad Advertiser) []byte {
 	q.Set("secret", secret)
 	url := fmt.Sprintf("%s?%s", BAIDU_URL, q.Encode())
 
-	fmt.Println(url)
-	fmt.Println(idfa)
+	// log.Println(url)
+	// log.Println(idfa)
 
 	post_data := bytes.NewBuffer([]byte(idfa))
 	req, err := http.NewRequest("POST", url, post_data)
@@ -53,11 +54,11 @@ func SendRequestBaiduIME(app App, ad Advertiser) []byte {
 		Timeout: timeout,
 	}
 
-	fmt.Println("sending request to", url)
+	log.Println("sending request to", url)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 		return []byte("")
 	}
 
@@ -68,8 +69,8 @@ func SendRequestBaiduIME(app App, ad Advertiser) []byte {
 	text, _ := ioutil.ReadAll(resp.Body)
 
 	if resp.StatusCode != 200 {
-		fmt.Println("status not 200:", resp.StatusCode)
-		fmt.Println("response:", string(text))
+		log.Println("status not 200:", resp.StatusCode)
+		log.Println("response:", string(text))
 		return []byte("")
 	}
 

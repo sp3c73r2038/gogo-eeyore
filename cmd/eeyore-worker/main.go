@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -73,14 +74,14 @@ func process_message(app eeyore.App) {
 	} else if ad.Impl == "qijia" {
 		text = eeyore.SendRequestQijia(app, ad)
 	} else {
-		fmt.Println("unknown impl:", ad.Impl)
+		log.Println("unknown impl:", ad.Impl)
 		return
 	}
 
 	// fmt.Println("text:", string(text))
 
 	if len(text) <= 0 {
-		fmt.Println("no text")
+		log.Println("no text")
 		return
 	}
 
@@ -92,7 +93,7 @@ func process_message(app eeyore.App) {
 	}
 
 	if len(mapping) == 0 {
-		fmt.Println("not valid response")
+		log.Println("not valid response")
 		return
 	}
 
@@ -114,12 +115,12 @@ func pop() eeyore.App {
 		time.Second*5, "qianka:eeyore:pending_send").Result()
 
 	if err == redis.Nil {
-		fmt.Println("no pending payload")
+		log.Println("no pending payload")
 		return app
 	} else if err != nil {
 		r = nil
-		fmt.Printf("%T\n", err)
-		fmt.Printf("%+v\n", err)
+		log.Printf("%T\n", err)
+		log.Printf("%+v\n", err)
 		return app
 	}
 
@@ -156,7 +157,7 @@ func push(app eeyore.App) {
 
 	if err != nil {
 		r = nil
-		fmt.Println(err)
+		log.Println(err)
 	}
 
 	if info == 1 {
@@ -165,10 +166,10 @@ func push(app eeyore.App) {
 }
 
 func get_sign(
-	apple_id string, idfa string, timestamp int, shared_key string) string {
+	apple_id int64, idfa string, timestamp int, shared_key string) string {
 	m := md5.New()
 
-	io.WriteString(m, apple_id)
+	io.WriteString(m, strconv.FormatInt(apple_id, 10))
 	io.WriteString(m, idfa)
 	io.WriteString(m, strconv.Itoa(timestamp))
 	io.WriteString(m, shared_key)
@@ -182,7 +183,7 @@ func send_request(app eeyore.App, ad eeyore.Advertiser) []byte {
 	u := new(url.URL)
 	q := u.Query()
 
-	q.Set("appid", app.AppleId)
+	q.Set("appid", strconv.FormatInt(app.AppleId, 10))
 	idfa := strings.Join(app.IDFA, ",")
 	q.Set("idfa", idfa)
 
@@ -191,6 +192,11 @@ func send_request(app eeyore.App, ad eeyore.Advertiser) []byte {
 		q.Set("timestamp", strconv.Itoa(timestamp))
 		sign := get_sign(app.AppleId, idfa, timestamp, ad.SharedKey)
 		q.Set("sign", sign)
+
+		if ad.CallerId != "" {
+			q.Set("callerid", ad.CallerId)
+		}
+
 	}
 
 	body := q.Encode()
@@ -208,11 +214,11 @@ func send_request(app eeyore.App, ad eeyore.Advertiser) []byte {
 		Timeout: timeout,
 	}
 
-	fmt.Println("sending request to", app.Url)
+	log.Println("sending request to", app.Url)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 		return []byte("")
 	}
 
@@ -223,8 +229,8 @@ func send_request(app eeyore.App, ad eeyore.Advertiser) []byte {
 	text, _ := ioutil.ReadAll(resp.Body)
 
 	if resp.StatusCode != 200 {
-		fmt.Println("status not 200:", resp.StatusCode)
-		fmt.Println("response:", string(text))
+		log.Println("status not 200:", resp.StatusCode)
+		log.Println("response:", string(text))
 		return []byte("")
 	}
 
@@ -238,8 +244,8 @@ func handle_response(text []byte) map[string]int {
 	err := codec.NewDecoderBytes(text, new(codec.JsonHandle)).Decode(&m)
 
 	if err != nil {
-		fmt.Println("decode error", err)
-		fmt.Println(string(text))
+		log.Println("decode error", err)
+		log.Println(string(text))
 		return m
 	}
 
@@ -260,14 +266,14 @@ func main() {
 	}
 
 	config = eeyore.LoadConfig(config_filename)
-	fmt.Printf("eeyore Config: %+v\n", config)
+	log.Printf("eeyore Config: %+v\n", config)
 
 	var app eeyore.App
 
 	for {
 		app = pop()
 		// fmt.Println("apple_id:", app.AppleId)
-		if app.AppleId == "" {
+		if app.AppleId == 0 {
 			continue
 		}
 		go process_message(app)

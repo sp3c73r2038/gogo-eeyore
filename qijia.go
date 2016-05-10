@@ -2,17 +2,16 @@ package eeyore
 
 import (
 	"bytes"
-	"fmt"
 	"github.com/ugorji/go/codec"
 	"io/ioutil"
+	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 )
 
 type Payload struct {
-	AppleId int    `codec:"appid"`
+	AppleId int64  `codec:"appid"`
 	Source  string `codec:"source"`
 	IDFA    string `codec:"idfa"`
 }
@@ -20,7 +19,7 @@ type Payload struct {
 func SendRequestQijia(app App, ad Advertiser) []byte {
 
 	payload := Payload{}
-	payload.AppleId, _ = strconv.Atoi(app.AppleId)
+	payload.AppleId = app.AppleId
 	payload.Source = "qianka"
 	payload.IDFA = strings.Join(app.IDFA, ",")
 
@@ -42,11 +41,11 @@ func SendRequestQijia(app App, ad Advertiser) []byte {
 		Timeout: timeout,
 	}
 
-	fmt.Println("sending request to", app.Url)
+	log.Println("sending request to", app.Url)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 		return []byte("")
 	}
 
@@ -55,8 +54,8 @@ func SendRequestQijia(app App, ad Advertiser) []byte {
 	text, _ := ioutil.ReadAll(resp.Body)
 
 	if resp.StatusCode != 200 {
-		fmt.Println("status not 200:", resp.StatusCode)
-		fmt.Println("response:", string(text))
+		log.Println("status not 200:", resp.StatusCode)
+		log.Println("response:", string(text))
 		return []byte("")
 	}
 

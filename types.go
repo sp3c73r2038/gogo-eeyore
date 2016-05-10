@@ -20,6 +20,7 @@ type Advertiser struct {
 	Impl      string
 	Timeout   int
 	SharedKey string
+	CallerId  string
 }
 
 type Config struct {
@@ -32,8 +33,8 @@ type Config struct {
 type App struct {
 	AdvertiserId int64          `codec:"ad_id"`
 	Url          string         `codec:"url"`
-	AppleId      string         `codec:"apple_id"`
+	AppleId      int64          `codec:"apple_id"`
 	IdfaType     int            `codec:"idfa_type"`
-	IDFA         []string       `codec:"idfas"`
-	Result       map[string]int `codec:"result"`
+	IDFA         []string       `codec:"idfas,omitempty"`
+	Result       map[string]int `codec:"result,omitempty"`
 }
