@@ -17,7 +17,7 @@ func MsgpackUnpackb(data []byte, dest interface{}) error {
 	h.RawToString = true
 
 	var dec *codec.Decoder = codec.NewDecoderBytes(data, &h)
-	err := dec.Decode(&dest)
+	err := dec.Decode(dest)
 
 	return err
 }
