@@ -95,6 +95,12 @@ func cache_set(key string, m interface{}, expire time.Duration) error {
 	return err
 }
 
+func pop() {
+}
+
+func push() {
+}
+
 func get_todo_tasks() map[int64]eeyore.App {
 
 	var rv map[int64]eeyore.App = make(map[int64]eeyore.App)

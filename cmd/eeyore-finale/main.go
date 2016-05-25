@@ -2,61 +2,93 @@ package main
 
 import (
 	"eeyore"
+	"flag"
 	"fmt"
 	"log"
-	"os"
 	"time"
+)
 
+import (
+	"github.com/garyburd/redigo/redis"
 	"github.com/ugorji/go/codec"
-	"gopkg.in/redis.v3"
+)
+
+var (
+	config_file = flag.String("config", "eeyore.toml", "config file")
+	worker      = flag.Int("worker", 32, "worker number")
 )
 
 var config eeyore.Config
-var r map[string]*redis.Client
+var r map[string]*redis.Pool
+var cnt int64 = 0
+var logger eeyore.KafkaLogger
 
-func get_redis(bind string) {
-	client := redis.NewClient(&redis.Options{
-		Addr: fmt.Sprintf(
-			"%s:%d",
-			config.Redis[bind].Host,
-			config.Redis[bind].Port),
-		Password: config.Redis[bind].Pass,
-		DB:       config.Redis[bind].Db,
-	})
-	return client
+func initKafkaLogger() {
+	logger = eeyore.KafkaLogger{}
+	logger.Init(config.Kafka)
+}
+
+func newRedisPool(server eeyore.Redis) *redis.Pool {
+	return &redis.Pool{
+		MaxActive:   1024,
+		MaxIdle:     16,
+		IdleTimeout: 60 * time.Second,
+		Dial: func() (redis.Conn, error) {
+			address := fmt.Sprintf(
+				"%s:%d", server.Host, server.Port)
+			c, err := redis.Dial("tcp", address)
+			if err != nil {
+				return nil, err
+			}
+			return c, err
+		},
+		TestOnBorrow: func(c redis.Conn, t time.Time) error {
+			_, err := c.Do("PING")
+			return err
+		},
+	}
+}
+
+func initRedis() {
+	r = make(map[string]*redis.Pool)
+
+	r["result"] = newRedisPool(config.Redis["result"])
+	r["backend"] = newRedisPool(config.Redis["backend"])
 }
 
 func write_check_result(user_id int64, apple_id int64, status int) error {
 	key := fmt.Sprintf("hera:idfa-check:result_%d_%d", user_id, apple_id)
 	value := fmt.Sprintf("%d %d", status, int(time.Now().Unix()))
 
-	client := get_redis("result")
+	client := r["result"].Get()
 	defer client.Close()
 
-	_, err := client.Set(key, value, time.Second*0).Result()
+	_, err := client.Do("SET", key, value)
 	return err
 }
 
 // pop from pending_cache queue
 // * include msgpack unpack
-func pop_worker(q chan []byte) {
-	client := get_redis("backend")
+func pop(q chan []byte) {
+	client := r["backend"].Get()
 	defer client.Close()
 
 	for {
-		info, err := client.BLPop(
-			time.Second*5, "qianka:eeyore:pending_cache").Result()
+		info, err := client.Do("BLPOP",
+			"qianka:eeyore:pending_cache", 5)
 
-		if err == redis.Nil {
-			log.Println("no pending payload")
-			continue
-		} else if err != nil {
+		if err != nil {
 			// r["backend"] = nil
 			log.Printf("pop error: %+v", err)
 			continue
+		} else if info == nil {
+			log.Println("no pending payload")
+			continue
 		}
 
-		q <- []byte(info[1])
+		payload := info.([]interface{})[1].([]byte)
+		q <- payload
+		cnt++
 	}
 }
 
@@ -64,11 +96,11 @@ func pop_worker(q chan []byte) {
 func push(b []byte) {
 	var err error
 
-	client := get_redis("backend")
+	client := r["backend"].Get()
 	defer client.Close()
 
-	_, err = client.RPush(
-		"qianka:eeyore:pending_write_back", string(b)).Result()
+	_, err = client.Do(
+		"RPUSH", "qianka:eeyore:pending_write_back", b)
 
 	if err != nil {
 		// r["backend"] = nil
@@ -83,9 +115,16 @@ func get_user_id_by_idfa(idfa string) (int64, error) {
 	var err error
 	key = fmt.Sprintf("qianka:eeyore:idfa_%s_user", idfa)
 
-	client := get_redis("backend")
+	client := r["backend"].Get()
+	defer client.Close()
 
-	info, err := client.Get(key).Result()
+	info, err := client.Do("GET", key)
+
+	if info == nil {
+		return rv, err
+	}
+
+	payload := info.([]byte)
 
 	if err != nil {
 		log.Println("get_user_id_by_idfa redis:", err)
@@ -94,7 +133,7 @@ func get_user_id_by_idfa(idfa string) (int64, error) {
 
 	var h codec.MsgpackHandle
 
-	var dec *codec.Decoder = codec.NewDecoderBytes([]byte(info), &h)
+	var dec *codec.Decoder = codec.NewDecoderBytes(payload, &h)
 	err = dec.Decode(&rv)
 	log.Println("user_id:", rv)
 
@@ -109,6 +148,7 @@ func get_user_id_by_idfa(idfa string) (int64, error) {
 func process_message(q chan []byte) {
 	var app *eeyore.App
 	var b []byte
+	var ob []byte
 	var err error
 
 	for {
@@ -127,7 +167,9 @@ func process_message(q chan []byte) {
 		// log.Printf("%+v", app)
 
 		apple_id := app.AppleId
-		log.Printf("%+v", apple_id)
+		// log.Println("apple_id:", apple_id)
+
+		mapping := make([]([]int64), 0)
 
 		for k, v := range app.Result {
 			idfa := k
@@ -141,35 +183,53 @@ func process_message(q chan []byte) {
 				continue
 			}
 
+			var _v = make([]int64, 0)
+			_v = append(_v, user_id)
+			_v = append(_v, apple_id)
+			_v = append(_v, int64(status))
+			mapping = append(mapping, _v)
 			write_check_result(user_id, apple_id, status)
+
+			if status == 0 {
+				logger.Info(fmt.Sprintf(
+					"user %d has done %d",
+					user_id, apple_id))
+			}
+			if status == 1 {
+				logger.Info(fmt.Sprintf(
+					"user %d has undone %d",
+					user_id, apple_id))
+			}
 		}
 
-		push(b)
+		ob, err = eeyore.MsgpackPackb(mapping)
+		if err != nil {
+			continue
+		}
+		// log.Println("output bytes:", ob)
+		push(ob)
 	}
 
 }
 
 func main() {
-	config_filename := ""
-
-	if len(os.Args) == 1 {
-		config_filename = "eeyore.toml"
-	} else {
-		config_filename = os.Args[1]
-	}
-
-	config = eeyore.LoadConfig(config_filename)
+	flag.Parse()
+	config = eeyore.LoadConfig(*config_file)
 	log.Printf("eeyore Config: %+v\n", config)
 
+	initRedis()
+	initKafkaLogger()
+
 	q := make(chan []byte)
-	for i := 0; i < 16; i++ {
+	for i := 0; i < *worker; i++ {
 		go pop(q)
 	}
-	for i := 0; i < 32; i++ {
+	for i := 0; i < *worker; i++ {
 		go process_message(q)
 	}
 
 	for {
-		time.Sleep(time.Second * 1)
+		time.Sleep(time.Second * 10)
+		log.Printf("processed: %d", cnt)
 	}
 }

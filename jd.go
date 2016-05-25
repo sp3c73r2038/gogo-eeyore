@@ -39,9 +39,14 @@ func SendRequestJD(app App, ad Advertiser) []byte {
 		// 商城
 		client_type = 1
 	} else if app.AppleId == 895682747 {
+		// 金融
 		client_type = 4
 	} else if app.AppleId == 832444218 {
+		// 钱包
 		client_type = 7
+	} else if app.AppleId == 506583396 {
+		// 阅读
+		client_type = 10
 	} else {
 		log.Println("jd: unknown app id", app.AppleId)
 		return []byte("")

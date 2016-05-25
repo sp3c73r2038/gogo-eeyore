@@ -15,6 +15,16 @@ type Redis struct {
 	Db   int64
 }
 
+type Amqp struct {
+	Url        string
+	Exchange   string
+	RoutingKey string
+}
+
+type Statsd struct {
+	Endpoint string
+}
+
 type Advertiser struct {
 	Id        int64
 	Impl      string
@@ -28,6 +38,9 @@ type Config struct {
 	Database   map[string]Database
 	Redis      map[string]Redis
 	Advertiser map[string]Advertiser
+	Kafka      KafkaConfig
+	Amqp       map[string]Amqp
+	Statsd     Statsd
 }
 
 type App struct {
