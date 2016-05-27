@@ -179,7 +179,6 @@ func loop() {
 	tasks := get_todo_tasks()
 
 	// log.Printf("%+v", tasks)
-
 	err := cache_set("qianka:eeyore:todo_apps", tasks, time.Minute*5)
 
 	if err != nil {

@@ -1,5 +1,13 @@
 debug = false
 
+[statsd]
+endpoint = "127.0.0.1:4000"
+
+
+[kafka]
+host = ["127.0.0.1:9092"]
+topic = "test"
+
 [database]
 
   [database.zhuanqian]
@@ -7,8 +15,14 @@ debug = false
   port = 3306
   user = "root"
   pass = ""
-  dbname = "zhuanqian"
+  db = "ops"
 
+  [database.idfa_check]
+  host = "127.0.0.1"
+  port = 3306
+  user = "root"
+  pass = ""
+  db = "ops"
 
 [redis]
 
@@ -19,6 +33,12 @@ debug = false
   db = 0
 
   [redis.backend]
+  host = "127.0.0.1"
+  port = 6379
+  pass = ""
+  db = 0
+
+  [redis.result]
   host = "127.0.0.1"
   port = 6379
   pass = ""
@@ -37,3 +57,11 @@ debug = false
 
   [advertiser.4]
   impl = "qijia"
+
+
+[amqp]
+
+  [amqp.frontend]
+  url = "amqp://guest:guest@127.0.0.1:5672/"
+  exchange = "amq.topic"
+  routingkey = "*"

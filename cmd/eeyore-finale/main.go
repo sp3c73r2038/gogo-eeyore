@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"runtime"
 	"time"
 )
 
@@ -15,7 +16,7 @@ import (
 
 var (
 	config_file = flag.String("config", "eeyore.toml", "config file")
-	worker      = flag.Int("worker", 32, "worker number")
+	worker      = flag.Int("worker", 4, "worker number")
 )
 
 var config eeyore.Config
@@ -30,9 +31,9 @@ func initKafkaLogger() {
 
 func newRedisPool(server eeyore.Redis) *redis.Pool {
 	return &redis.Pool{
-		MaxActive:   1024,
-		MaxIdle:     16,
-		IdleTimeout: 60 * time.Second,
+		MaxActive:   *worker * 2,
+		MaxIdle:     *worker,
+		IdleTimeout: 5 * time.Second,
 		Dial: func() (redis.Conn, error) {
 			address := fmt.Sprintf(
 				"%s:%d", server.Host, server.Port)
@@ -71,7 +72,6 @@ func write_check_result(user_id int64, apple_id int64, status int) error {
 // * include msgpack unpack
 func pop(q chan []byte) {
 	client := r["backend"].Get()
-	defer client.Close()
 
 	for {
 		info, err := client.Do("BLPOP",
@@ -80,9 +80,12 @@ func pop(q chan []byte) {
 		if err != nil {
 			// r["backend"] = nil
 			log.Printf("pop error: %+v", err)
+			client.Close()
+			client = r["backend"].Get()
+			time.Sleep(time.Second * 3)
 			continue
 		} else if info == nil {
-			log.Println("no pending payload")
+			// log.Println("no pending payload")
 			continue
 		}
 
@@ -105,6 +108,7 @@ func push(b []byte) {
 	if err != nil {
 		// r["backend"] = nil
 		log.Println("push error", err)
+		time.Sleep(time.Second * 3)
 	}
 }
 
@@ -121,6 +125,7 @@ func get_user_id_by_idfa(idfa string) (int64, error) {
 	info, err := client.Do("GET", key)
 
 	if info == nil {
+		time.Sleep(time.Second * 3)
 		return rv, err
 	}
 
@@ -135,7 +140,7 @@ func get_user_id_by_idfa(idfa string) (int64, error) {
 
 	var dec *codec.Decoder = codec.NewDecoderBytes(payload, &h)
 	err = dec.Decode(&rv)
-	log.Println("user_id:", rv)
+	// log.Println("user_id:", rv)
 
 	if err != nil {
 		log.Println("get_user_id_by_idfa msgpack:", err)
@@ -216,6 +221,7 @@ func main() {
 	flag.Parse()
 	config = eeyore.LoadConfig(*config_file)
 	log.Printf("eeyore Config: %+v\n", config)
+	log.Println("available GOMAXPROCS:", runtime.GOMAXPROCS(*worker))
 
 	initRedis()
 	initKafkaLogger()
