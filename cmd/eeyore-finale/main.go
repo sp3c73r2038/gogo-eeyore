@@ -19,42 +19,103 @@ var (
 	worker      = flag.Int("worker", 4, "worker number")
 )
 
+type RedisPool struct {
+	Pool redis.Pool
+	Db   int64
+}
+
+func (p *RedisPool) Get() redis.Conn {
+	conn := p.Pool.Get()
+	conn.Do("SELECT", p.Db)
+	return conn
+}
+
 var config eeyore.Config
-var r map[string]*redis.Pool
+var r map[string]*RedisPool
 var cnt int64 = 0
 var logger eeyore.KafkaLogger
+var stat eeyore.StatClient
 
 func initKafkaLogger() {
 	logger = eeyore.KafkaLogger{}
 	logger.Init(config.Kafka)
 }
 
-func newRedisPool(server eeyore.Redis) *redis.Pool {
-	return &redis.Pool{
-		MaxActive:   *worker * 2,
-		MaxIdle:     *worker,
-		IdleTimeout: 5 * time.Second,
-		Dial: func() (redis.Conn, error) {
-			address := fmt.Sprintf(
-				"%s:%d", server.Host, server.Port)
-			c, err := redis.Dial("tcp", address)
-			if err != nil {
-				return nil, err
-			}
-			return c, err
+func initStatClient() {
+	stat = eeyore.StatClient{
+		Endpoint: config.Statsd.Endpoint,
+	}
+}
+
+func getCheckingTiming(user_id int64, apple_id int64) int64 {
+	var rv int64
+	key := fmt.Sprintf(
+		"qianka:eeyore:check_timing_%d_%d", user_id, apple_id)
+
+	client := r["monitor"].Get()
+	defer client.Close()
+
+	info, err := client.Do("GET", key)
+
+	if info == nil {
+		return 0
+	}
+
+	payload := info.([]byte)
+	var h codec.MsgpackHandle
+	var dec *codec.Decoder = codec.NewDecoderBytes(payload, &h)
+	err = dec.Decode(&rv)
+	if err != nil {
+		log.Println("getCheckingTiming:", err)
+		return 0
+	}
+	return rv
+}
+
+func responseTiming(user_id int64, apple_id int64) {
+	prev_t := getCheckingTiming(user_id, apple_id)
+
+	if prev_t == 0 {
+		return
+	}
+
+	delta := time.Now().Unix() - prev_t
+
+	payload := fmt.Sprintf("job.eeyore.check_response:%d|ms", delta*1000)
+	// log.Println(payload)
+	stat.Send(payload)
+}
+
+func newRedisPool(server eeyore.Redis) *RedisPool {
+	return &RedisPool{
+		Pool: redis.Pool{
+			MaxActive:   *worker * 2,
+			MaxIdle:     *worker,
+			IdleTimeout: 5 * time.Second,
+			Dial: func() (redis.Conn, error) {
+				address := fmt.Sprintf(
+					"%s:%d", server.Host, server.Port)
+				c, err := redis.Dial("tcp", address)
+				if err != nil {
+					return nil, err
+				}
+				return c, err
+			},
+			TestOnBorrow: func(c redis.Conn, t time.Time) error {
+				_, err := c.Do("PING")
+				return err
+			},
 		},
-		TestOnBorrow: func(c redis.Conn, t time.Time) error {
-			_, err := c.Do("PING")
-			return err
-		},
+		Db: server.Db,
 	}
 }
 
 func initRedis() {
-	r = make(map[string]*redis.Pool)
+	r = make(map[string]*RedisPool)
 
 	r["result"] = newRedisPool(config.Redis["result"])
 	r["backend"] = newRedisPool(config.Redis["backend"])
+	r["monitor"] = newRedisPool(config.Redis["monitor"])
 }
 
 func write_check_result(user_id int64, apple_id int64, status int) error {
@@ -65,6 +126,8 @@ func write_check_result(user_id int64, apple_id int64, status int) error {
 	defer client.Close()
 
 	_, err := client.Do("SET", key, value)
+
+	stat.Send("job.eeyore.write_result:1|c")
 	return err
 }
 
@@ -75,7 +138,7 @@ func pop(q chan []byte) {
 
 	for {
 		info, err := client.Do("BLPOP",
-			"qianka:eeyore:pending_cache", 5)
+			"qianka:eeyore:pending_cache", 0)
 
 		if err != nil {
 			// r["backend"] = nil
@@ -195,6 +258,8 @@ func process_message(q chan []byte) {
 			mapping = append(mapping, _v)
 			write_check_result(user_id, apple_id, status)
 
+			responseTiming(user_id, apple_id)
+
 			if status == 0 {
 				logger.Info(fmt.Sprintf(
 					"user %d has done %d",
@@ -224,6 +289,7 @@ func main() {
 	log.Println("available GOMAXPROCS:", runtime.GOMAXPROCS(*worker))
 
 	initRedis()
+	initStatClient()
 	initKafkaLogger()
 
 	q := make(chan []byte)

@@ -3,37 +3,58 @@ package main
 import (
 	"bytes"
 	"crypto/md5"
+	"eeyore"
+	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
-	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
+)
 
-	"eeyore"
-
+import (
+	"github.com/garyburd/redigo/redis"
 	"github.com/ugorji/go/codec"
-	"gopkg.in/redis.v3"
+)
+
+var (
+	configFile = flag.String("config", "eeyore.toml", "config file")
+	worker     = flag.Int("worker", 32, "worker number")
 )
 
 var config eeyore.Config
-var r *redis.Client
+var r map[string]*redis.Pool
 
-func redis_connect() {
-	if r == nil {
-		r = redis.NewClient(&redis.Options{
-			Addr: fmt.Sprintf(
-				"%s:%d",
-				config.Redis["backend"].Host,
-				config.Redis["backend"].Port),
-			Password: config.Redis["backend"].Pass,
-			DB:       config.Redis["backend"].Db,
-		})
+func newRedisPool(server eeyore.Redis) *redis.Pool {
+	return &redis.Pool{
+		MaxActive:   1024,
+		MaxIdle:     16,
+		IdleTimeout: 5 * time.Second,
+		Dial: func() (redis.Conn, error) {
+			address := fmt.Sprintf(
+				"%s:%d", server.Host, server.Port)
+			c, err := redis.Dial("tcp", address)
+			if err != nil {
+				return nil, err
+			}
+			return c, err
+		},
+		TestOnBorrow: func(c redis.Conn, t time.Time) error {
+			_, err := c.Do("PING")
+			return err
+		},
 	}
+}
+
+func initRedis() {
+	r = make(map[string]*redis.Pool)
+
+	r["backend"] = newRedisPool(config.Redis["backend"])
 }
 
 func process_message(app eeyore.App) {
@@ -73,6 +94,8 @@ func process_message(app eeyore.App) {
 		text = eeyore.SendRequestBaiduIME(app, ad)
 	} else if ad.Impl == "qijia" {
 		text = eeyore.SendRequestQijia(app, ad)
+	} else if ad.Impl == "zhangyue" {
+		text = eeyore.SendRequestZhangyue(app, ad)
 	} else {
 		log.Println("unknown impl:", ad.Impl)
 		return
@@ -88,6 +111,8 @@ func process_message(app eeyore.App) {
 	var mapping map[string]int
 	if ad.Impl == "jd" {
 		mapping = eeyore.HandleResponseJD(text)
+	} else if ad.Impl == "zhangyue" {
+		mapping = eeyore.HandleResponseZhangyue(text)
 	} else {
 		mapping = handle_response(text)
 	}
@@ -107,20 +132,20 @@ func process_message(app eeyore.App) {
 // * will return empty App if no response
 func pop() eeyore.App {
 	// fmt.Println("poping...")
-	redis_connect()
 
 	var app eeyore.App
 
-	info, err := r.BLPop(
-		time.Second*5, "qianka:eeyore:pending_send").Result()
+	client := r["backend"].Get()
+	defer client.Close()
 
-	if err == redis.Nil {
-		log.Println("no pending payload")
-		return app
-	} else if err != nil {
+	info, err := client.Do("BLPOP",
+		"qianka:eeyore:pending_send", 0)
+
+	if err != nil {
 		r = nil
-		log.Printf("%T\n", err)
-		log.Printf("%+v\n", err)
+		log.Printf("pop: %T\n", err)
+		log.Printf("pop: %+v\n", err)
+		initRedis()
 		return app
 	}
 
@@ -129,8 +154,12 @@ func pop() eeyore.App {
 	var h codec.MsgpackHandle
 	h.RawToString = true
 
-	var dec *codec.Decoder = codec.NewDecoderBytes([]byte(info[1]), &h)
+	payload := info.([]interface{})[1].([]byte)
+
+	var dec *codec.Decoder = codec.NewDecoderBytes(payload, &h)
 	err = dec.Decode(&app)
+
+	// log.Printf("%+v", app)
 
 	if err != nil {
 		panic(err)
@@ -150,14 +179,13 @@ func push(app eeyore.App) {
 		panic(err)
 	}
 
-	redis_connect()
-
-	info, err := r.RPush(
-		"qianka:eeyore:pending_cache", string(b)).Result()
+	client := r["backend"].Get()
+	info, err := client.Do("RPUSH", "qianka:eeyore:pending_cache", b)
 
 	if err != nil {
 		r = nil
-		log.Println(err)
+		log.Println("push:", err)
+		initRedis()
 	}
 
 	if info == 1 {
@@ -255,18 +283,12 @@ func handle_response(text []byte) map[string]int {
 
 func main() {
 
-	// prog := os.Args[0]
-
-	config_filename := ""
-
-	if len(os.Args) == 1 {
-		config_filename = "eeyore.toml"
-	} else {
-		config_filename = os.Args[1]
-	}
-
-	config = eeyore.LoadConfig(config_filename)
+	flag.Parse()
+	config = eeyore.LoadConfig(*configFile)
 	log.Printf("eeyore Config: %+v\n", config)
+	log.Println("available GOMAXPROCS:", runtime.GOMAXPROCS(*worker))
+
+	initRedis()
 
 	var app eeyore.App
 

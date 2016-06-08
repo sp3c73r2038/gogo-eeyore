@@ -20,7 +20,7 @@ import (
 )
 
 var (
-	configFile = flag.String("config", "eeyore.toml", "config file")
+	configfile = flag.String("config", "eeyore.toml", "config file")
 	worker     = flag.Int("worker", 16, "worker number")
 )
 
