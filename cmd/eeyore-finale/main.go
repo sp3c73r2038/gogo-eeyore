@@ -10,7 +10,6 @@ import (
 )
 
 import (
-	"github.com/garyburd/redigo/redis"
 	"github.com/ugorji/go/codec"
 )
 
@@ -19,19 +18,8 @@ var (
 	worker      = flag.Int("worker", 4, "worker number")
 )
 
-type RedisPool struct {
-	Pool redis.Pool
-	Db   int64
-}
-
-func (p *RedisPool) Get() redis.Conn {
-	conn := p.Pool.Get()
-	conn.Do("SELECT", p.Db)
-	return conn
-}
-
 var config eeyore.Config
-var r map[string]*RedisPool
+var r map[string]*eeyore.RedisPool
 var cnt int64 = 0
 var logger eeyore.KafkaLogger
 var stat eeyore.StatClient
@@ -84,38 +72,6 @@ func responseTiming(user_id int64, apple_id int64) {
 	payload := fmt.Sprintf("job.eeyore.check_response:%d|ms", delta*1000)
 	// log.Println(payload)
 	stat.Send(payload)
-}
-
-func newRedisPool(server eeyore.Redis) *RedisPool {
-	return &RedisPool{
-		Pool: redis.Pool{
-			MaxActive:   *worker * 2,
-			MaxIdle:     *worker,
-			IdleTimeout: 5 * time.Second,
-			Dial: func() (redis.Conn, error) {
-				address := fmt.Sprintf(
-					"%s:%d", server.Host, server.Port)
-				c, err := redis.Dial("tcp", address)
-				if err != nil {
-					return nil, err
-				}
-				return c, err
-			},
-			TestOnBorrow: func(c redis.Conn, t time.Time) error {
-				_, err := c.Do("PING")
-				return err
-			},
-		},
-		Db: server.Db,
-	}
-}
-
-func initRedis() {
-	r = make(map[string]*RedisPool)
-
-	r["result"] = newRedisPool(config.Redis["result"])
-	r["backend"] = newRedisPool(config.Redis["backend"])
-	r["monitor"] = newRedisPool(config.Redis["monitor"])
 }
 
 func write_check_result(user_id int64, apple_id int64, status int) error {
@@ -288,7 +244,8 @@ func main() {
 	log.Printf("eeyore Config: %+v\n", config)
 	log.Println("available GOMAXPROCS:", runtime.GOMAXPROCS(*worker))
 
-	initRedis()
+	r = eeyore.InitRedis(
+		*worker, []string{"backend", "result", "monitor"}, config)
 	initStatClient()
 	initKafkaLogger()
 

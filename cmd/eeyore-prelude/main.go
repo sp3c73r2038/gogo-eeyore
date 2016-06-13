@@ -3,32 +3,26 @@ package main
 import (
 	"database/sql"
 	"eeyore"
+	"flag"
 	"fmt"
 	"log"
-	"os"
 	"regexp"
+	"runtime"
 	"time"
+)
 
+import (
 	"github.com/go-sql-driver/mysql"
-	"gopkg.in/redis.v3"
+)
+
+var (
+	config_file = flag.String("config", "eeyore.toml", "config file")
+	worker      = flag.Int("worker", 4, "worker number")
 )
 
 var config eeyore.Config
-var r *redis.Client
 var db map[string]*sql.DB
-
-func redis_connect() {
-	if r == nil {
-		r = redis.NewClient(&redis.Options{
-			Addr: fmt.Sprintf(
-				"%s:%d",
-				config.Redis["backend"].Host,
-				config.Redis["backend"].Port),
-			Password: config.Redis["backend"].Pass,
-			DB:       config.Redis["backend"].Db,
-		})
-	}
-}
+var r map[string]*eeyore.RedisPool
 
 func mysql_connect(bind string) {
 
@@ -77,8 +71,7 @@ func get_db(bind string) *sql.DB {
 	return db[bind]
 }
 
-func cache_set(key string, m interface{}, expire time.Duration) error {
-	redis_connect()
+func cache_set(key string, m interface{}, expire int) error {
 
 	b, err := eeyore.MsgpackPackb(m)
 
@@ -86,10 +79,16 @@ func cache_set(key string, m interface{}, expire time.Duration) error {
 		return err
 	}
 
-	_, err = r.Set(key, b, expire).Result()
+	client := r["backend"].Get()
+	defer client.Close()
+
+	_, err = client.Do("SETEX", key, expire, b)
 
 	if err != nil {
 		r = nil
+		log.Printf("pop: %T\n", err)
+		log.Printf("pop: %+v\n", err)
+		r = eeyore.InitRedis(*worker, []string{"backend"}, config)
 	}
 
 	return err
@@ -171,7 +170,8 @@ func cache_task_app_mapping(tasks map[int64]eeyore.App) {
 	for _, task := range tasks {
 		// log.Printf("%+v", task)
 		key = fmt.Sprintf("qianka:eeyore:app_%d", task.AppleId)
-		cache_set(key, task, time.Minute*10)
+
+		cache_set(key, task, 600) // 10 minutes
 	}
 }
 
@@ -179,7 +179,7 @@ func loop() {
 	tasks := get_todo_tasks()
 
 	// log.Printf("%+v", tasks)
-	err := cache_set("qianka:eeyore:todo_apps", tasks, time.Minute*5)
+	err := cache_set("qianka:eeyore:todo_apps", tasks, 300) // 5 minutes
 
 	if err != nil {
 		log.Println(err)
@@ -189,16 +189,13 @@ func loop() {
 }
 
 func main() {
-	config_filename := ""
 
-	if len(os.Args) == 1 {
-		config_filename = "eeyore.toml"
-	} else {
-		config_filename = os.Args[1]
-	}
-
-	config = eeyore.LoadConfig(config_filename)
+	flag.Parse()
+	config = eeyore.LoadConfig(*config_file)
 	log.Printf("eeyore Config: %+v\n", config)
+	log.Println("available GOMAXPROCS:", runtime.GOMAXPROCS(*worker))
+
+	r = eeyore.InitRedis(*worker, []string{"backend"}, config)
 
 	cnt := 0
 	for {

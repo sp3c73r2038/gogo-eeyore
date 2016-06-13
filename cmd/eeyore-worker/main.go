@@ -18,7 +18,6 @@ import (
 )
 
 import (
-	"github.com/garyburd/redigo/redis"
 	"github.com/ugorji/go/codec"
 )
 
@@ -28,144 +27,126 @@ var (
 )
 
 var config eeyore.Config
-var r map[string]*redis.Pool
+var r map[string]*eeyore.RedisPool
 
-func newRedisPool(server eeyore.Redis) *redis.Pool {
-	return &redis.Pool{
-		MaxActive:   1024,
-		MaxIdle:     16,
-		IdleTimeout: 5 * time.Second,
-		Dial: func() (redis.Conn, error) {
-			address := fmt.Sprintf(
-				"%s:%d", server.Host, server.Port)
-			c, err := redis.Dial("tcp", address)
-			if err != nil {
-				return nil, err
-			}
-			return c, err
-		},
-		TestOnBorrow: func(c redis.Conn, t time.Time) error {
-			_, err := c.Do("PING")
-			return err
-		},
-	}
-}
-
-func initRedis() {
-	r = make(map[string]*redis.Pool)
-
-	r["backend"] = newRedisPool(config.Redis["backend"])
-}
-
-func process_message(app eeyore.App) {
+func process_message(q chan eeyore.App) {
 	// fmt.Printf("app: %+v\n", app)
-
+	var app eeyore.App
 	var ad eeyore.Advertiser
 
-	ad_id := strconv.FormatInt(app.AdvertiserId, 10)
-	if val, ok := config.Advertiser[ad_id]; ok {
-		ad = val
-		ad.Id = app.AdvertiserId
+	for {
+		app = <-q
 
-		if ad.Impl == "" {
-			ad.Impl = "base"
+		ad_id := strconv.FormatInt(app.AdvertiserId, 10)
+		if val, ok := config.Advertiser[ad_id]; ok {
+			ad = val
+			ad.Id = app.AdvertiserId
+
+			if ad.Impl == "" {
+				ad.Impl = "base"
+			}
+			if ad.Timeout == 0 {
+				ad.Timeout = 30
+			}
+
+		} else {
+			ad = eeyore.Advertiser{
+				Id:        app.AdvertiserId,
+				Impl:      "base",
+				Timeout:   30,
+				SharedKey: "",
+			}
 		}
-		if ad.Timeout == 0 {
-			ad.Timeout = 30
+
+		// fmt.Printf("%+v\n", ad)
+
+		var text []byte
+		if ad.Impl == "base" {
+			text = send_request(app, ad)
+		} else if ad.Impl == "jd" {
+			text = eeyore.SendRequestJD(app, ad)
+		} else if ad.Impl == "baidu_ime" {
+			text = eeyore.SendRequestBaiduIME(app, ad)
+		} else if ad.Impl == "qijia" {
+			text = eeyore.SendRequestQijia(app, ad)
+		} else if ad.Impl == "zhangyue" {
+			text = eeyore.SendRequestZhangyue(app, ad)
+		} else {
+			log.Println("unknown impl:", ad.Impl)
+			continue
 		}
 
-	} else {
-		ad = eeyore.Advertiser{
-			Id:        app.AdvertiserId,
-			Impl:      "base",
-			Timeout:   30,
-			SharedKey: "",
+		// fmt.Println("text:", string(text))
+
+		if len(text) <= 0 {
+			log.Println("no text")
+			continue
 		}
+
+		var mapping map[string]int
+		if ad.Impl == "jd" {
+			mapping = eeyore.HandleResponseJD(text)
+		} else if ad.Impl == "zhangyue" {
+			mapping = eeyore.HandleResponseZhangyue(text)
+		} else {
+			mapping = handle_response(text)
+		}
+
+		if len(mapping) == 0 {
+			log.Println("not valid response")
+			continue
+		}
+
+		app.Result = mapping
+
+		push(app)
 	}
 
-	// fmt.Printf("%+v\n", ad)
-
-	var text []byte
-	if ad.Impl == "base" {
-		text = send_request(app, ad)
-	} else if ad.Impl == "jd" {
-		text = eeyore.SendRequestJD(app, ad)
-	} else if ad.Impl == "baidu_ime" {
-		text = eeyore.SendRequestBaiduIME(app, ad)
-	} else if ad.Impl == "qijia" {
-		text = eeyore.SendRequestQijia(app, ad)
-	} else if ad.Impl == "zhangyue" {
-		text = eeyore.SendRequestZhangyue(app, ad)
-	} else {
-		log.Println("unknown impl:", ad.Impl)
-		return
-	}
-
-	// fmt.Println("text:", string(text))
-
-	if len(text) <= 0 {
-		log.Println("no text")
-		return
-	}
-
-	var mapping map[string]int
-	if ad.Impl == "jd" {
-		mapping = eeyore.HandleResponseJD(text)
-	} else if ad.Impl == "zhangyue" {
-		mapping = eeyore.HandleResponseZhangyue(text)
-	} else {
-		mapping = handle_response(text)
-	}
-
-	if len(mapping) == 0 {
-		log.Println("not valid response")
-		return
-	}
-
-	app.Result = mapping
-
-	push(app)
 }
 
 // pop from pending_send queue
 // * including msgpack unpack
 // * will return empty App if no response
-func pop() eeyore.App {
+func pop(q chan eeyore.App) {
 	// fmt.Println("poping...")
 
 	var app eeyore.App
-
 	client := r["backend"].Get()
 	defer client.Close()
 
-	info, err := client.Do("BLPOP",
-		"qianka:eeyore:pending_send", 0)
+	for {
+		info, err := client.Do("BLPOP",
+			"qianka:eeyore:pending_send", 0)
 
-	if err != nil {
-		r = nil
-		log.Printf("pop: %T\n", err)
-		log.Printf("pop: %+v\n", err)
-		initRedis()
-		return app
+		if err != nil {
+			r = nil
+			log.Printf("pop(): %T\n", err)
+			log.Printf("pop(): %+v\n", err)
+			r = eeyore.InitRedis(
+				*worker, []string{"backend"}, config)
+			time.Sleep(time.Second * 1)
+			continue
+		}
+
+		// fmt.Println(info[1])
+
+		var h codec.MsgpackHandle
+		h.RawToString = true
+
+		payload := info.([]interface{})[1].([]byte)
+
+		var dec *codec.Decoder = codec.NewDecoderBytes(payload, &h)
+		err = dec.Decode(&app)
+
+		// log.Printf("%+v", app)
+
+		if err != nil {
+			log.Println("pop():", err)
+			continue
+		}
+
+		q <- app
 	}
-
-	// fmt.Println(info[1])
-
-	var h codec.MsgpackHandle
-	h.RawToString = true
-
-	payload := info.([]interface{})[1].([]byte)
-
-	var dec *codec.Decoder = codec.NewDecoderBytes(payload, &h)
-	err = dec.Decode(&app)
-
-	// log.Printf("%+v", app)
-
-	if err != nil {
-		panic(err)
-	}
-
-	return app
 }
 
 // push to pending_cache queue
@@ -176,7 +157,8 @@ func push(app eeyore.App) {
 	err := enc.Encode(app)
 
 	if err != nil {
-		panic(err)
+		log.Println("push():", err)
+		return
 	}
 
 	client := r["backend"].Get()
@@ -184,8 +166,9 @@ func push(app eeyore.App) {
 
 	if err != nil {
 		r = nil
-		log.Println("push:", err)
-		initRedis()
+		log.Println("push():", err)
+		r = eeyore.InitRedis(
+			*worker, []string{"backend"}, config)
 	}
 
 	if info == 1 {
@@ -288,16 +271,17 @@ func main() {
 	log.Printf("eeyore Config: %+v\n", config)
 	log.Println("available GOMAXPROCS:", runtime.GOMAXPROCS(*worker))
 
-	initRedis()
+	r = eeyore.InitRedis((*worker * 3), []string{"backend"}, config)
 
-	var app eeyore.App
+	q := make(chan eeyore.App)
+	for i := 0; i < *worker; i++ {
+		go pop(q)
+	}
+	for i := 0; i < *worker; i++ {
+		go process_message(q)
+	}
 
 	for {
-		app = pop()
-		// fmt.Println("apple_id:", app.AppleId)
-		if app.AppleId == 0 {
-			continue
-		}
-		go process_message(app)
+		time.Sleep(time.Second * 10)
 	}
 }

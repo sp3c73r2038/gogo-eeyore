@@ -14,18 +14,17 @@ import (
 )
 
 import (
-	"github.com/garyburd/redigo/redis"
 	"github.com/go-sql-driver/mysql"
 	"github.com/ugorji/go/codec"
 )
 
 var (
-	configfile = flag.String("config", "eeyore.toml", "config file")
-	worker     = flag.Int("worker", 16, "worker number")
+	config_file = flag.String("config", "eeyore.toml", "config file")
+	worker      = flag.Int("worker", 16, "worker number")
 )
 
 var config eeyore.Config
-var r map[string]*redis.Pool
+var r map[string]*eeyore.RedisPool
 var db map[string]*sql.DB
 var cnt int64
 
@@ -93,33 +92,6 @@ func getDb(bind string) *sql.DB {
 	return db[bind]
 }
 
-func newRedisPool(server eeyore.Redis) *redis.Pool {
-	return &redis.Pool{
-		MaxActive:   1024,
-		MaxIdle:     16,
-		IdleTimeout: 60 * time.Second,
-		Dial: func() (redis.Conn, error) {
-			address := fmt.Sprintf(
-				"%s:%d", server.Host, server.Port)
-			c, err := redis.Dial("tcp", address)
-			if err != nil {
-				return nil, err
-			}
-			return c, err
-		},
-		TestOnBorrow: func(c redis.Conn, t time.Time) error {
-			_, err := c.Do("PING")
-			return err
-		},
-	}
-}
-
-func initRedis() {
-	r = make(map[string]*redis.Pool)
-
-	r["backend"] = newRedisPool(config.Redis["backend"])
-}
-
 func pop() []([]int64) {
 	rv := make([]([]int64), 0)
 	client := r["backend"].Get()
@@ -129,8 +101,9 @@ func pop() []([]int64) {
 		"qianka:eeyore:pending_write_back", 5)
 
 	if err != nil {
-		// r["backend"] = nil
+		r = nil
 		log.Printf("pop error: %+v", err)
+		r = eeyore.InitRedis(*worker, []string{"backend"}, config)
 		return rv
 	} else if info == nil {
 		// log.Println("no pending payload")
@@ -204,10 +177,10 @@ func sinkWorker() {
 
 func main() {
 	flag.Parse()
-	config = eeyore.LoadConfig(*configFile)
+	config = eeyore.LoadConfig(*config_file)
 	log.Printf("%+v", config)
 	log.Println("available GOMAXPROCS:", runtime.GOMAXPROCS(*worker))
-	initRedis()
+	r = eeyore.InitRedis(*worker, []string{"backend"}, config)
 
 	go func() {
 		log.Println(http.ListenAndServe("0.0.0.0:6060", nil))
