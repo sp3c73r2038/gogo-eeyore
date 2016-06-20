@@ -1,4 +1,5 @@
 debug = false
+idfaconfigbaseurl = "http://127.0.0.1:4567/ops_api/idfa/verify"
 
 [statsd]
 endpoint = "127.0.0.1:4000"
@@ -44,19 +45,29 @@ topic = "test"
   pass = ""
   db = 0
 
-[advertiser]
+  [redis.monitor]
+  host = "127.0.0.1"
+  port = 6379
+  pass = ""
+  db = 0
 
-  [advertiser.1]
-  sharedkey = "c2ad26c6-9d4e-4958-94ca-d8c566ab165a"
-
-  [advertiser.2]
-  impl = "jd"
-
-  [advertiser.3]
-  impl = "baidu_ime"
-
-  [advertiser.4]
-  impl = "qijia"
+# [advertiser]
+#
+#   [advertiser.1]
+#   sharedkey = "c2ad26c6-9d4e-4958-94ca-d8c566ab165a"
+#
+#   [advertiser.2]
+#   impl = "jd"
+#
+#   [advertiser.3]
+#   impl = "baidu_ime"
+#
+#   [advertiser.4]
+#   impl = "qijia"
+#
+#   [advertiser.5]
+#   # 掌阅
+#   impl = "zhangyue"
 
 
 [amqp]

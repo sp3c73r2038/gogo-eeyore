@@ -1,16 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"crypto/md5"
 	"eeyore"
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
-	"net/http"
 	"net/url"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -28,16 +26,31 @@ var (
 
 var config eeyore.Config
 var r map[string]*eeyore.RedisPool
+var loader eeyore.IDFAConfigLoader
+
+// var loader eeyore.IDFAConfigLoader
 
 func process_message(q chan eeyore.App) {
 	// fmt.Printf("app: %+v\n", app)
 	var app eeyore.App
 	var ad eeyore.Advertiser
+	var idfa_config eeyore.IdfaConfig
 
 	for {
 		app = <-q
 
+		idfa_config = loader.GetByApp(app.AppleId)
+		if idfa_config.AppId == 0 {
+			idfa_config = loader.GetByAdvertiser(app.AdvertiserId)
+		}
+
+		if len(idfa_config.TemplateCode) > 0 {
+			ad.Impl = idfa_config.TemplateCode
+		}
+
+		log.Printf("process_message(): %+v", idfa_config)
 		ad_id := strconv.FormatInt(app.AdvertiserId, 10)
+
 		if val, ok := config.Advertiser[ad_id]; ok {
 			ad = val
 			ad.Id = app.AdvertiserId
@@ -58,11 +71,9 @@ func process_message(q chan eeyore.App) {
 			}
 		}
 
-		// fmt.Printf("%+v\n", ad)
-
 		var text []byte
 		if ad.Impl == "base" {
-			text = send_request(app, ad)
+			text = SendRequest(app, ad, idfa_config)
 		} else if ad.Impl == "jd" {
 			text = eeyore.SendRequestJD(app, ad)
 		} else if ad.Impl == "baidu_ime" {
@@ -89,7 +100,7 @@ func process_message(q chan eeyore.App) {
 		} else if ad.Impl == "zhangyue" {
 			mapping = eeyore.HandleResponseZhangyue(text)
 		} else {
-			mapping = handle_response(text)
+			mapping = HandleResponse(text, idfa_config)
 		}
 
 		if len(mapping) == 0 {
@@ -189,68 +200,87 @@ func get_sign(
 
 // send_request `the standard` version
 // * send request and fetch body
-func send_request(app eeyore.App, ad eeyore.Advertiser) []byte {
+func SendRequest(
+	app eeyore.App, ad eeyore.Advertiser, idfa_config eeyore.IdfaConfig) []byte {
 
-	u := new(url.URL)
-	q := u.Query()
+	var idfa string
+	var data url.Values
+	var sign string
+	var timeout time.Duration
+	var httpCode int
+	var err error
+	var rv []byte
 
-	q.Set("appid", strconv.FormatInt(app.AppleId, 10))
-	idfa := strings.Join(app.IDFA, ",")
-	q.Set("idfa", idfa)
+	if len(idfa_config.SharedKey) > 0 {
+		ad.SharedKey = idfa_config.SharedKey
+	}
+
+	data = url.Values{}
+	data.Set("appid", strconv.FormatInt(app.AppleId, 10))
+
+	idfa = strings.Join(app.IDFA, ",")
+	if idfa_config.RequestIDFALowerCase {
+		idfa = strings.ToLower(idfa)
+	}
+
+	if idfa_config.RequestIDFANoHyphen {
+		idfa = strings.Replace(idfa, "-", "", -1)
+	}
+
+	data.Set("idfa", idfa)
 
 	if ad.SharedKey != "" {
 		timestamp := int(time.Now().Unix())
-		q.Set("timestamp", strconv.Itoa(timestamp))
-		sign := get_sign(app.AppleId, idfa, timestamp, ad.SharedKey)
-		q.Set("sign", sign)
+		data.Set("timestamp", strconv.Itoa(timestamp))
+		sign = get_sign(app.AppleId, idfa, timestamp, ad.SharedKey)
+		data.Set("sign", sign)
 
 		if ad.CallerId != "" {
-			q.Set("callerid", ad.CallerId)
+			data.Set("callerid", ad.CallerId)
 		}
-
 	}
 
-	body := q.Encode()
-	// fmt.Println(body)
-	post_data := bytes.NewBuffer([]byte(body))
-	req, err := http.NewRequest("POST", app.Url, post_data)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if idfa_config.AppId == 0 && idfa_config.AdvertiserId == 0 {
+		timeout = time.Second * time.Duration(ad.Timeout)
+		httpCode, rv, err = eeyore.HttpRequestPost(
+			app.Url,
+			timeout,
+			data,
+			"application/x-www-form-urlencoded",
+		)
 
-	if err != nil {
-		panic(err)
+		if httpCode != 200 {
+			log.Println("SendRequest() http not 200:", err)
+		}
+		return rv
 	}
 
-	timeout := time.Second * time.Duration(ad.Timeout)
-	client := &http.Client{
-		Timeout: timeout,
+	/// use idfa_config to customize request
+	// fill in default value
+	idfa_config.RequestHttpMethod = strings.ToUpper(idfa_config.RequestHttpMethod)
+	if len(idfa_config.RequestHttpMethod) == 0 {
+		idfa_config.RequestHttpMethod = "POST"
 	}
 
-	log.Println("sending request to", app.Url)
+	httpCode, rv, err = eeyore.HttpRequest(
+		idfa_config.RequestHttpMethod,
+		app.Url,
+		data,
+		time.Second*time.Duration(ad.Timeout),
+		idfa_config.RequestContentType,
+	)
 
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Println(err)
-		return []byte("")
+	if httpCode != 200 {
+		log.Println("SendRequest() http not 200:", err)
 	}
+	return rv
 
-	// fmt.Println("status:", resp.StatusCode)
-
-	defer resp.Body.Close()
-
-	text, _ := ioutil.ReadAll(resp.Body)
-
-	if resp.StatusCode != 200 {
-		log.Println("status not 200:", resp.StatusCode)
-		log.Println("response:", string(text))
-		return []byte("")
-	}
-
-	return text
 }
 
 // handle response `the standard` version
 // * JSON decode
-func handle_response(text []byte) map[string]int {
+func HandleResponse(text []byte, idfa_config eeyore.IdfaConfig) map[string]int {
+	var rv map[string]int
 	var m map[string]int
 	err := codec.NewDecoderBytes(text, new(codec.JsonHandle)).Decode(&m)
 
@@ -260,8 +290,36 @@ func handle_response(text []byte) map[string]int {
 		return m
 	}
 
-	return m
+	rv = make(map[string]int)
+	for k, v := range m {
+		rv[strings.ToUpper(k)] = v
+	}
 
+	if idfa_config.ResponseIDFANoHyphen {
+		rv = IdfaFillHyphen(rv)
+	}
+
+	log.Printf("HandleResponse(): %+v", rv)
+
+	return rv
+}
+
+func IdfaFillHyphen(data map[string]int) map[string]int {
+	var rv map[string]int
+	var newkey string
+	var m bool
+
+	rv = make(map[string]int)
+	for k, v := range data {
+		m, _ = regexp.MatchString(`^[A-Z0-9]{32}$`, k)
+		if m {
+			newkey = fmt.Sprintf(
+				"%s-%s-%s-%s-%s", k[:8], k[8:12], k[12:16], k[16:20], k[20:])
+			rv[newkey] = v
+		}
+	}
+
+	return rv
 }
 
 func main() {
@@ -271,7 +329,12 @@ func main() {
 	log.Printf("eeyore Config: %+v\n", config)
 	log.Println("available GOMAXPROCS:", runtime.GOMAXPROCS(*worker))
 
-	r = eeyore.InitRedis((*worker * 3), []string{"backend"}, config)
+	r = eeyore.InitRedis((*worker * 5), []string{"backend"}, config)
+	loader = eeyore.IDFAConfigLoader{
+		BaseURL:     config.IDFAConfigBaseURL,
+		CacheExpiry: 60,
+	}
+	loader.Init()
 
 	q := make(chan eeyore.App)
 	for i := 0; i < *worker; i++ {
