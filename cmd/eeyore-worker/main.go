@@ -214,6 +214,9 @@ func SendRequest(
 	if len(idfa_config.SharedKey) > 0 {
 		ad.SharedKey = idfa_config.SharedKey
 	}
+	if len(idfa_config.ExtendedField.CallerId) > 0 {
+		ad.CallerId = idfa_config.ExtendedField.CallerId
+	}
 
 	data = url.Values{}
 	data.Set("appid", strconv.FormatInt(app.AppleId, 10))

@@ -54,20 +54,24 @@ type App struct {
 }
 
 type IdfaConfig struct {
-	AdvertiserId         int64  `codec:"ad_id"`
-	AppId                int64  `codec:"app_id"`
-	Enabled              bool   `codec:"is_enabled"`
-	TemplateCode         string `codec:"template_code"`
-	SharedKey            string `codec:"shared_key"`
-	RequestContentType   string `codec:"req_content_type"`
-	RequestHttpMethod    string `codec:"req_http_method"`
-	RequestIDFALowerCase bool   `codec:"req_idfa_lowercase"`
-	RequestIDFAMaxNum    int    `codec:"req_idfa_maxnum"`
-	RequestIDFANoHyphen  bool   `codec:"req_idfa_nohyphen"`
-	ResponseIDFANoHyphen bool   `codec:"res_idfa_nohyphen"`
-	ResponseJSONFormat   string `codec:"res_json_format"`
-	ExtendedField        string `codec:"ext_field"`
+	AdvertiserId         int64         `codec:"ad_id"`
+	AppId                int64         `codec:"app_id"`
+	Enabled              bool          `codec:"is_enabled"`
+	TemplateCode         string        `codec:"template_code"`
+	SharedKey            string        `codec:"shared_key"`
+	RequestContentType   string        `codec:"req_content_type"`
+	RequestHttpMethod    string        `codec:"req_http_method"`
+	RequestIDFALowerCase bool          `codec:"req_idfa_lowercase"`
+	RequestIDFAMaxNum    int           `codec:"req_idfa_maxnum"`
+	RequestIDFANoHyphen  bool          `codec:"req_idfa_nohyphen"`
+	ResponseIDFANoHyphen bool          `codec:"res_idfa_nohyphen"`
+	ResponseJSONFormat   string        `codec:"res_json_format"`
+	ExtendedField        ExtendedField `codec:"ext_field"`
 	Timestamp            int
+}
+
+type ExtendedField struct {
+	CallerId string `codec:"callerid"`
 }
 
 type IdfaConfigResponse struct {
